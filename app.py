@@ -1,7 +1,9 @@
 import os
 import sqlite3
 import logging
+import pandas as pd
 import json
+
 from datetime import datetime
 
 # Import our modules
@@ -28,12 +30,14 @@ class PoliticalAlignmentApp:
     a simple interface for running the application.
     """
     
-    def __init__(self, db_path="political_alignment.db"):
+    def __init__(self, db_path="political_alignment.db", voteview_metadata_path=None, auto_update_metadata=False):
         """
         Initialize the application with database path
         
         Args:
             db_path (str): Path to SQLite database
+            voteview_metadata_path (str, optional): Path to Rvoteview metadata CSV file
+            auto_update_metadata (bool, optional): Whether to auto-update metadata if older than 30 days
         """
         self.db_path = db_path
         self.conn = None
@@ -44,7 +48,11 @@ class PoliticalAlignmentApp:
             api_key=os.environ.get("CONGRESS_API_KEY")
         )
         
-        self.rvoteview_scraper = RvoteviewScraper(db_path=db_path)
+        self.rvoteview_scraper = RvoteviewScraper(
+            db_path=db_path, 
+            metadata_path=voteview_metadata_path,
+            auto_update=auto_update_metadata
+        )
         self.scoring_system = AlignmentScoring(db_path=db_path)
         
     def initialize_database(self, schema_file="schema.sql"):
@@ -271,7 +279,7 @@ class PoliticalAlignmentApp:
             # 3. Update with Voteview IDs
             logger.info("Updating representatives with Voteview IDs...")
             members_df = self.rvoteview_scraper.fetch_voteview_members()
-            self.rvoteview_scraper.update_representatives_with_voteview_ids(members_df)
+            self.rvoteview_scraper.update_representatives_with_voteview_data(members_df)
             
             # 4. For each representative, collect votes and infer positions
             cursor = self.conn.cursor()
@@ -538,8 +546,33 @@ class PoliticalAlignmentApp:
 
 # Example usage
 if __name__ == "__main__":
-    # Create the application
-    app = PoliticalAlignmentApp()
+    # Check for Voteview members file - use HSall_members.csv for member data
+    default_metadata_path = "HSall_members.csv"
+    metadata_path = default_metadata_path  # Always use this path, auto-update will create if missing
+    
+    # Parse command-line arguments
+    import argparse
+    parser = argparse.ArgumentParser(description='Political Alignment Tool')
+    parser.add_argument('--force-update', action='store_true', help='Force update of Rvoteview metadata')
+    parser.add_argument('--auto-update', action='store_true', help='Auto-update metadata if older than 30 days')
+    args = parser.parse_args()
+    
+    # Handle metadata
+    if args.force_update:
+        print("Forcing update of Rvoteview metadata...")
+        # Create a temporary scraper just to update metadata
+        temp_scraper = RvoteviewScraper(db_path="political_alignment.db", metadata_path=metadata_path)
+        temp_scraper.update_metadata()
+    
+    print(f"Using Rvoteview metadata path: {metadata_path}")
+    if not os.path.exists(metadata_path):
+        print("Metadata file not found. It will be downloaded automatically if auto-update is enabled.")
+    
+    # Create the application with metadata and auto-update if specified
+    app = PoliticalAlignmentApp(
+        voteview_metadata_path=metadata_path,
+        auto_update_metadata=args.auto_update
+    )
     
     # Initialize the database
     app.initialize_database()
